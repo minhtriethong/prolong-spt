@@ -1,1 +1,1 @@
-# prolong-spt 1.0
+# prolong-spt
