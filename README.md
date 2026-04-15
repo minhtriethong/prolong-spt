@@ -1,4 +1,4 @@
-# prolong-spt
+# prolong_spt
 
 MATLAB tools for single-particle detection and tracking in long-duration live-cell single-molecule movies.
 In practice, the pipeline scans an input folder for image files supported by the Bio-Formats toolbox, detects candidate particles, and performs subpixel localization with Gaussian refinement using routines adapted from Picasso. Particle trajectories are then generated using u-track.
@@ -15,7 +15,7 @@ In practice, the pipeline scans an input folder for image files supported by the
 Example:
 
 ```matlab
-addpath(genpath('path/to/prolong-spt'));
+addpath(genpath('path/to/prolong_spt'));
 addpath(genpath('path/to/u-track'));
 addpath(genpath('path/to/bfmatlab'));
 savepath;
@@ -23,11 +23,11 @@ savepath;
 
 ## Usage
 
-### `prolong-spt`
+### `prolong_spt`
 #### Function signature
 
 ```matlab
-prolong-spt(inputFolder, boxSize, minNetGradient, voxelSize, frameInterval)
+prolong_spt(inputFolder, boxSize, minNetGradient, voxelSize, frameInterval)
 ```
 
 #### Required arguments
