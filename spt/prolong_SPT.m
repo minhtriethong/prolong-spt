@@ -1,19 +1,4 @@
 function prolong_SPT(inputFolder, boxSize, minNetGradient, voxelSize, frameInterval, contrastMinVal, contrastMaxVal)
-%prolong_SPT Run the NNB single-particle-tracking pipeline without the GUI.
-%
-%   prolong_SPT(inputFolder, boxSize, minNetGradient, voxelSize, ...
-%       frameInterval, contrastMinVal, contrastMaxVal)
-%
-%   This is the headless equivalent of NNB_GUI/processImages.
-%
-%   Headless behavior differences from the app:
-%   1) Gaussian subpixel fitting is enabled by default below to match the
-%      GUI checkbox default.
-%   2) If <inputFolder>/Results already exists, a new timestamped folder
-%      Results_yyyymmdd_HHMMSS is created automatically instead of showing
-%      a dialog.
-%   3) Progress is printed to the MATLAB command window and logged to
-%      NNB_log.txt in the results folder.
 
 narginchk(5, 7);
 
