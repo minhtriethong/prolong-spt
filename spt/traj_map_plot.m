@@ -1,0 +1,267 @@
+function hFig = traj_map_plot(processingInfo)
+%TRAJ_MAP_PLOT Fast trajectory map with per-track colors and gap filling.
+%
+%   hFig = traj_map_plot(processingInfo)
+%
+%   Inputs
+%   ------
+%   processingInfo : struct with fields
+%       processingInfo.tracksCoordinates.X
+%       processingInfo.tracksCoordinates.Y
+%
+%   markerSize : scalar, optional
+%       Marker diameter in DATA units.
+%       Default = 1
+%
+%   Notes
+%   -----
+%   - Uses up to the first 500 tracks.
+%   - Fills INTERNAL NaN gaps linearly for trajectory display only.
+%   - Keeps leading/trailing NaNs untouched.
+%   - Draws all colored trajectories in ONE patch object.
+%   - Draws all round markers in ONE patch object.
+%   - Marker size is in DATA units, so it scales naturally with zoom.
+
+% ----------------------------
+% defaults
+% ----------------------------
+markerSize = 1;
+
+validateattributes(markerSize, {'numeric'}, ...
+    {'scalar','real','finite','>',0}, mfilename, 'markerSize', 2);
+
+% ----------------------------
+% validate input
+% ----------------------------
+if ~isstruct(processingInfo) || ...
+        ~isfield(processingInfo, 'tracksCoordinates') || ...
+        ~isfield(processingInfo.tracksCoordinates, 'X') || ...
+        ~isfield(processingInfo.tracksCoordinates, 'Y')
+    error('traj_map_plot:BadInput', ...
+        'processingInfo.tracksCoordinates.X and .Y are required.');
+end
+
+X = processingInfo.tracksCoordinates.X;
+Y = processingInfo.tracksCoordinates.Y;
+
+if ~isnumeric(X) || ~isnumeric(Y) || ~isequal(size(X), size(Y))
+    error('traj_map_plot:BadInput', ...
+        'tracksCoordinates.X and .Y must be numeric arrays of the same size.');
+end
+
+% ----------------------------
+% speed / display settings
+% ----------------------------
+maxTracks       = min(500, size(X,2));
+maxMarkerPoints = 5000;   % increase for denser markers, decrease for more speed
+nCircleVertices = 12;     % 10-16 is a good speed/shape tradeoff
+lineWidth       = 0.5;
+
+% use only the first tracks and single precision
+X = single(X(:,1:maxTracks));
+Y = single(Y(:,1:maxTracks));
+
+% only accept points where BOTH coordinates are finite
+valid = isfinite(X) & isfinite(Y);
+X(~valid) = NaN;
+Y(~valid) = NaN;
+
+% fill INTERNAL gaps only (leading/trailing NaNs stay NaN)
+[X, Y] = fillInternalGapsLinear(X, Y);
+
+% remove tracks that still contain no finite points
+valid = isfinite(X) & isfinite(Y);
+keepTrack = any(valid, 1);
+
+X = X(:, keepTrack);
+Y = Y(:, keepTrack);
+valid = valid(:, keepTrack);
+
+if isempty(X)
+    error('traj_map_plot:NoData', 'No finite trajectory points found.');
+end
+
+nTracks = size(X,2);
+
+% ----------------------------
+% choose one color per track
+% ----------------------------
+% hsv() is used here because it gives many distinct hues and works in
+% older MATLAB releases.
+trackColors = turbo(nTracks + 1);
+trackColors = single(trackColors(1:nTracks, :));
+
+% ----------------------------
+% compress each track to its finite span
+% ----------------------------
+firstIdx = zeros(1, nTracks);
+lastIdx  = zeros(1, nTracks);
+lenTrack = zeros(1, nTracks);
+
+for j = 1:nTracks
+    idx = find(valid(:,j));
+    firstIdx(j) = idx(1);
+    lastIdx(j)  = idx(end);
+    lenTrack(j) = lastIdx(j) - firstIdx(j) + 1;
+end
+
+maxLen = max(lenTrack);
+
+% One patch for all trajectory lines:
+% each column is one open polyline; trailing NaN prevents closure
+Xline = nan(maxLen + 1, nTracks, 'single');
+Yline = nan(maxLen + 1, nTracks, 'single');
+Cline = zeros(maxLen + 1, nTracks, 3, 'single');
+
+totalPoints = sum(lenTrack);
+stride = max(1, ceil(double(totalPoints) / double(maxMarkerPoints)));
+
+% marker preallocation
+nMarkers = sum(ceil(double(lenTrack) / double(stride)));
+markerX = zeros(nMarkers, 1, 'single');
+markerY = zeros(nMarkers, 1, 'single');
+markerTrack = zeros(nMarkers, 1);
+
+mk = 0;
+
+for j = 1:nTracks
+    idxj = firstIdx(j):lastIdx(j);
+    Lj = lenTrack(j);
+
+    % packed trajectory coordinates
+    Xline(1:Lj, j) = X(idxj, j);
+    Yline(1:Lj, j) = Y(idxj, j);
+
+    % same RGB at every vertex in this track
+    Cline(1:Lj, j, 1) = trackColors(j,1);
+    Cline(1:Lj, j, 2) = trackColors(j,2);
+    Cline(1:Lj, j, 3) = trackColors(j,3);
+
+    % decimated marker centers for speed
+    localMarkerIdx = 1:stride:Lj;
+    nm = numel(localMarkerIdx);
+
+    markerX(mk + (1:nm)) = X(idxj(localMarkerIdx), j);
+    markerY(mk + (1:nm)) = Y(idxj(localMarkerIdx), j);
+    markerTrack(mk + (1:nm)) = j;
+
+    mk = mk + nm;
+end
+
+markerX = markerX(1:mk);
+markerY = markerY(1:mk);
+markerTrack = markerTrack(1:mk);
+
+% ----------------------------
+% build round markers as ONE face/vertex patch
+% ----------------------------
+r = single(markerSize / 2);
+
+theta = linspace(0, 2*pi, nCircleVertices + 1);
+theta(end) = [];
+theta = single(theta(:));
+
+baseX = r * cos(theta);   % nCircleVertices x 1
+baseY = r * sin(theta);   % nCircleVertices x 1
+
+nMarkers = numel(markerX);
+
+% Each marker is one face with nCircleVertices vertices
+Vx = bsxfun(@plus, baseX, reshape(markerX, 1, []));   % nv x nMarkers
+Vy = bsxfun(@plus, baseY, reshape(markerY, 1, []));   % nv x nMarkers
+
+Vertices = [Vx(:), Vy(:)];
+Faces = reshape(1:(nCircleVertices * nMarkers), nCircleVertices, []).';
+
+% one RGB color per marker face
+markerColors = trackColors(markerTrack, :);
+
+% ----------------------------
+% axes limits
+% ----------------------------
+finiteX = X(valid);
+finiteY = Y(valid);
+
+if isfield(processingInfo, 'sizeX') && isfield(processingInfo, 'sizeY') && ...
+        isnumeric(processingInfo.sizeX) && isnumeric(processingInfo.sizeY) && ...
+        isscalar(processingInfo.sizeX) && isscalar(processingInfo.sizeY) && ...
+        isfinite(processingInfo.sizeX) && isfinite(processingInfo.sizeY)
+
+    xL = [0 double(processingInfo.sizeX)];
+    yL = [0 double(processingInfo.sizeY)];
+else
+    xL = [floor(double(min(finiteX))) - 1, ceil(double(max(finiteX))) + 1];
+    yL = [floor(double(min(finiteY))) - 1, ceil(double(max(finiteY))) + 1];
+end
+
+% ----------------------------
+% create figure / axes
+% ----------------------------
+hFig = figure('Color', 'w', 'Name', 'Trajectory Map','Position',[100 100 330 350]);
+ax = axes('Parent', hFig,'Position',[0.1 0.11 0.9 0.75]);
+hold(ax, 'on');
+set(ax,'DataAspectRatio',[1 1 1],'TickDir','out','TickLength',...
+    [0.03 0.025],'XLimitMethod','tight','YLimitMethod','tight','ZLimitMethod',...
+    'tight');
+% all trajectories in one colored patch object
+hTraj = patch(ax, Xline, Yline, Cline, ...
+    'FaceColor', 'none', ...
+    'EdgeColor', 'flat', ...
+    'LineWidth', lineWidth);
+
+% all round markers in one patch object
+hDots = patch(ax, ...
+    'Faces', Faces, ...
+    'Vertices', Vertices, ...
+    'FaceVertexCData', markerColors, ...
+    'FaceColor', 'flat', ...
+    'EdgeColor', 'none');
+
+% reduce interaction overhead
+try, hTraj.HitTest = 'off';        catch, end
+try, hTraj.PickableParts = 'none'; catch, end
+try, hDots.HitTest = 'off';        catch, end
+try, hDots.PickableParts = 'none'; catch, end
+
+% axis setup
+axis(ax, 'image');
+ax.YDir = 'reverse';   % same visual orientation as axis ij
+xlim(ax, xL);
+ylim(ax, yL);
+box(ax, 'on');
+
+title(sprintf('%s', processingInfo.imageName),'Units', 'normalized', 'Position', [0.5, 1.07, 0], 'FontSize', 10);
+
+drawnow limitrate;
+end
+
+% ============================================================
+% local helper
+% ============================================================
+function [X, Y] = fillInternalGapsLinear(X, Y)
+% Fill INTERNAL NaN gaps only, independently per track.
+% Leading/trailing NaNs are preserved.
+
+nTracksLocal = size(X, 2);
+
+for jj = 1:nTracksLocal
+    validjj = isfinite(X(:,jj)) & isfinite(Y(:,jj));
+
+    if nnz(validjj) < 2
+        continue
+    end
+
+    idxValid = find(validjj);
+    i0 = idxValid(1);
+    i1 = idxValid(end);
+
+    span = (i0:i1).';
+
+    if all(validjj(span))
+        continue
+    end
+
+    X(span, jj) = interp1(idxValid, X(idxValid, jj), span, 'linear');
+    Y(span, jj) = interp1(idxValid, Y(idxValid, jj), span, 'linear');
+end
+end

@@ -1,0 +1,306 @@
+function spt_dataset_export(Results_folderpath, immobile_threshold)
+%spt_dataset_export Build, export, and plot an SPT dataset summary from a Results folder.
+%
+%   Usage
+%   -----
+%   spt_dataset_export(Results_folderpath)
+%   spt_dataset_export(Results_folderpath, immobile_threshold)
+%
+%   Input
+%   -----
+%   Results_folderpath : character vector or string scalar
+%       Path to a Results folder. Each immediate subfolder inside this
+%       folder is treated as one dataset entry and should contain a file
+%       named processingInfo.mat.
+%
+%   immobile_threshold : numeric scalar, optional
+%       Threshold applied as:
+%           log10(processingInfo.track_features.D.D_track) < immobile_threshold
+%       If provided, dataset.mean.immobilefraction is calculated and
+%       included in datasetInfo.mat and datasetInfo.csv.
+%       If omitted or empty ([]), immobile fraction is not calculated or exported.
+%
+%   Example
+%   -------
+%   spt_dataset_export('D:\Project\Results')
+%   spt_dataset_export('D:\Project\Results', -2)
+%
+%   Output files written to Results_folderpath
+%   ------------------------------------------
+%   datasetInfo.mat
+%       MATLAB struct named "dataset" with fields:
+%           dataset.raw.D
+%           dataset.raw.travelDistances
+%           dataset.raw.travelTime
+%           dataset.raw.majorAxis
+%           dataset.raw.minorAxis
+%           dataset.mean.D
+%           dataset.mean.travelDistances
+%           dataset.mean.travelTime
+%           dataset.mean.majorAxis
+%           dataset.mean.minorAxis
+%           dataset.mean.trackNo
+%           dataset.mean.immobilefraction   (only if immobile_threshold is provided)
+%
+%   datasetInfo.csv
+%       UTF-8 CSV summary table with headers:
+%           D (μm²/s)
+%           travelDistances (μm)
+%           travelTime (s)
+%           majorAxis (μm)
+%           minorAxis (μm)
+%           trackNo
+%           immobile fraction               (only if immobile_threshold is provided)
+%
+%   Plot files written to Results_folderpath
+%   ----------------------------------------
+%   The function also saves JPG and PDF histogram files:
+%       D_hist
+%       Major_axis
+%       Minor_axis
+%       Travel_distance
+%       Travel_time
+%
+%   User settings
+%   -------------
+%   Edit the "Plot settings" section below to change the X/Y limits for
+%   each histogram.
+%
+%   Required external function
+%   --------------------------
+%   histogram_dataset_log10
+%       This function must be available on the MATLAB path. JPG/PDF export
+%       is handled internally by spt_dataset_export.
+
+if nargin < 1 || nargin > 2
+    error('spt_dataset_export:InvalidInputCount', ...
+        'Usage: spt_dataset_export(Results_folderpath) or spt_dataset_export(Results_folderpath, immobile_threshold).');
+end
+
+if ~(ischar(Results_folderpath) || isstring(Results_folderpath))
+    error('spt_dataset_export:InvalidInput', ...
+        'Results_folderpath must be a character vector or string scalar.');
+end
+
+Results_folderpath = char(Results_folderpath);
+
+if ~isfolder(Results_folderpath)
+    error('spt_dataset_export:FolderNotFound', ...
+        'Results folder does not exist: %s', Results_folderpath);
+end
+
+calculateImmobileFraction = (nargin >= 2) && ~isempty(immobile_threshold);
+
+if calculateImmobileFraction
+    if ~(isnumeric(immobile_threshold) && isscalar(immobile_threshold) && isfinite(immobile_threshold))
+        error('spt_dataset_export:InvalidImmobileThreshold', ...
+            'immobile_threshold must be a finite numeric scalar when provided.');
+    end
+end
+
+mu = char(956);
+sup2 = char(178);
+
+header_D = ['D (' mu 'm' sup2 '/s)'];
+header_travelDistances = ['travelDistances (' mu 'm)'];
+header_travelTime = 'travelTime (s)';
+header_majorAxis = ['majorAxis (' mu 'm)'];
+header_minorAxis = ['minorAxis (' mu 'm)'];
+header_trackNo = 'trackNo';
+header_immobileFraction = 'immobile fraction';
+
+label_D = ['Diffusion coefficient (' mu 'm' sup2 '/s)'];
+label_majorAxis = ['Major axis (' mu 'm)'];
+label_minorAxis = ['Minor axis (' mu 'm)'];
+label_travelDistance = ['Travel distance (' mu 'm)'];
+label_travelTime = 'Travel time (s)';
+label_y = 'Probability density';
+
+% Plot settings (edit if needed)
+plotSettings.D.x = [-7, 4];
+plotSettings.D.y = [0, 0.2];
+
+plotSettings.majorAxis.x = [-3, 1];
+plotSettings.majorAxis.y = [0, 0.15];
+
+plotSettings.minorAxis.x = [-4, 1];
+plotSettings.minorAxis.y = [0, 0.15];
+
+plotSettings.travelDistances.x = [-3, 3];
+plotSettings.travelDistances.y = [0, 0.15];
+
+plotSettings.travelTime.x = [-1, 2];
+plotSettings.travelTime.y = [0, 0.4];
+
+% Get immediate subfolders only
+dirInfo = dir(Results_folderpath);
+isSubfolder = [dirInfo.isdir] & ~ismember({dirInfo.name}, {'.', '..'});
+subfolders = dirInfo(isSubfolder);
+
+if isempty(subfolders)
+    error('spt_dataset_export:NoSubfolders', ...
+        'No subfolders found in: %s', Results_folderpath);
+end
+
+nFolders = numel(subfolders);
+
+dataset = struct();
+
+dataset.raw = struct();
+dataset.raw.D = cell(nFolders, 1);
+dataset.raw.travelDistances = cell(nFolders, 1);
+dataset.raw.travelTime = cell(nFolders, 1);
+dataset.raw.majorAxis = cell(nFolders, 1);
+dataset.raw.minorAxis = cell(nFolders, 1);
+
+dataset.mean = struct();
+dataset.mean.D = nan(nFolders, 1);
+dataset.mean.travelDistances = nan(nFolders, 1);
+dataset.mean.travelTime = nan(nFolders, 1);
+dataset.mean.majorAxis = nan(nFolders, 1);
+dataset.mean.minorAxis = nan(nFolders, 1);
+dataset.mean.trackNo = nan(nFolders, 1);
+
+if calculateImmobileFraction
+    dataset.mean.immobilefraction = nan(nFolders, 1);
+end
+
+for i = 1:nFolders
+    folderName = subfolders(i).name;
+    matFile = fullfile(Results_folderpath, folderName, 'processingInfo.mat');
+
+    if ~isfile(matFile)
+        warning('spt_dataset_export:MissingFile', ...
+            'File not found, skipped: %s', matFile);
+        continue;
+    end
+
+    try
+        S = load(matFile, 'processingInfo');
+
+        if ~isfield(S, 'processingInfo')
+            warning('spt_dataset_export:MissingVariable', ...
+                'Variable "processingInfo" not found in: %s', matFile);
+            continue;
+        end
+
+        processingInfo = S.processingInfo;
+        track_features = processingInfo.track_features;
+
+        dataset.raw.D{i,1} = track_features.D.D_track_rolling_combined;
+        dataset.raw.travelDistances{i,1} = track_features.travelDistances;
+        dataset.raw.travelTime{i,1} = track_features.travelTime;
+        dataset.raw.majorAxis{i,1} = track_features.majorAxis;
+        dataset.raw.minorAxis{i,1} = track_features.minorAxis;
+
+        dataset.mean.D(i,1) = double(track_features.D.D_cell);
+        dataset.mean.travelDistances(i,1) = mean(track_features.travelDistances(:));
+        dataset.mean.travelTime(i,1) = mean(track_features.travelTime(:));
+        dataset.mean.majorAxis(i,1) = mean(track_features.majorAxis(:));
+        dataset.mean.minorAxis(i,1) = mean(track_features.minorAxis(:));
+        dataset.mean.trackNo(i,1) = length(processingInfo.track_features.D.D_track);
+
+        if calculateImmobileFraction
+            D_track = processingInfo.track_features.D.D_track;
+
+            if isempty(D_track)
+                dataset.mean.immobilefraction(i,1) = NaN;
+            else
+                dataset.mean.immobilefraction(i,1) = ...
+                    length(find(log10(D_track) < immobile_threshold)) / length(D_track);
+            end
+        end
+
+    catch ME
+        warning('spt_dataset_export:ProcessingFailed', ...
+            'Failed to process %s\n%s', matFile, ME.message);
+    end
+end
+
+save(fullfile(Results_folderpath, 'datasetInfo.mat'), 'dataset');
+
+headers = { ...
+    header_D, ...
+    header_travelDistances, ...
+    header_travelTime, ...
+    header_majorAxis, ...
+    header_minorAxis, ...
+    header_trackNo};
+
+summaryMatrix = [ ...
+    dataset.mean.D(:,1), ...
+    dataset.mean.travelDistances(:,1), ...
+    dataset.mean.travelTime(:,1), ...
+    dataset.mean.majorAxis(:,1), ...
+    dataset.mean.minorAxis(:,1), ...
+    dataset.mean.trackNo(:,1)];
+
+if calculateImmobileFraction
+    headers{end+1} = header_immobileFraction;
+    summaryMatrix = [summaryMatrix, dataset.mean.immobilefraction(:,1)];
+end
+
+csvFile = fullfile(Results_folderpath, 'datasetInfo.csv');
+fid = fopen(csvFile, 'w', 'n', 'UTF-8');
+
+if fid == -1
+    error('spt_dataset_export:CSVOpenFailed', ...
+        'Cannot open CSV file for writing: %s', csvFile);
+end
+
+cleaner = onCleanup(@() fclose(fid)); %#ok<NASGU>
+
+fwrite(fid, uint8([239 187 191]), 'uint8');
+
+headerFormat = [repmat('%s,', 1, numel(headers)-1), '%s\r\n'];
+fprintf(fid, headerFormat, headers{:});
+
+rowFormat = [repmat('%.15g,', 1, size(summaryMatrix, 2)-1), '%.15g\r\n'];
+for i = 1:size(summaryMatrix, 1)
+    fprintf(fid, rowFormat, summaryMatrix(i, :));
+end
+
+hasHistogramFunction = exist('histogram_dataset_log10', 'file') ~= 0;
+if ~hasHistogramFunction
+    warning('spt_dataset_export:PlotFunctionMissing', ...
+        ['datasetInfo.mat and datasetInfo.csv were saved, but plot files ' ...
+         'were skipped because histogram_dataset_log10 was not found on the MATLAB path.']);
+    return;
+end
+
+generate_dataset_plot(dataset.raw.D, label_D, label_y, ...
+    plotSettings.D.x, plotSettings.D.y, Results_folderpath, 'D_hist');
+
+generate_dataset_plot(dataset.raw.majorAxis, label_majorAxis, label_y, ...
+    plotSettings.majorAxis.x, plotSettings.majorAxis.y, Results_folderpath, 'Major_axis');
+
+generate_dataset_plot(dataset.raw.minorAxis, label_minorAxis, label_y, ...
+    plotSettings.minorAxis.x, plotSettings.minorAxis.y, Results_folderpath, 'Minor_axis');
+
+generate_dataset_plot(dataset.raw.travelDistances, label_travelDistance, label_y, ...
+    plotSettings.travelDistances.x, plotSettings.travelDistances.y, Results_folderpath, 'Travel_distance');
+
+generate_dataset_plot(dataset.raw.travelTime, label_travelTime, label_y, ...
+    plotSettings.travelTime.x, plotSettings.travelTime.y, Results_folderpath, 'Travel_time');
+
+end
+
+function generate_dataset_plot(dataCell, xLabelText, yLabelText, xRange, yRange, outputFolder, baseName)
+histogram_dataset_log10( ...
+    dataCell, xLabelText, yLabelText, ...
+    xRange(1), xRange(2), yRange(1), yRange(2));
+
+fig = gcf;
+drawnow;
+
+save_plot(fullfile(outputFolder, [baseName '.jpg']));
+saveas(gcf, fullfile(outputFolder, [baseName '.pdf']));
+
+close(fig);
+end
+
+function save_plot(savepath)
+fig = getframe(gcf);
+cdata = frame2im(fig);
+imwrite(cdata, savepath);
+end
